@@ -1,42 +1,54 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <title>YOLOv8 Mobile Real-Time Detector</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         /* CSS: จัดหน้าจอสำหรับมือถือ */
-        body { 
-            margin: 0; 
+        body {
+            margin: 0;
             padding: 0;
-            background-color: #1a1a1a; 
-            text-align: center; 
+            background-color: #1a1a1a;
+            /* NORMAL_COLOR */
+            text-align: center;
             font-family: Arial, sans-serif;
             color: #ffffff;
+            transition: background-color 0.3s ease;
+            /* เพิ่ม transition ให้สีเปลี่ยนนุ่มนวลขึ้น */
         }
-        #videoContainer { 
-            position: relative; 
-            width: 100%; 
-            max-width: 640px; /* จำกัดความกว้างสูงสุด */
-            margin: 0 auto; 
+
+        #videoContainer {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
         }
-        #video, #canvas { 
-            display: block; 
-            width: 100%; 
-            height: auto; 
+
+        #video,
+        #canvas {
+            display: block;
+            width: 100%;
+            height: auto;
         }
-        #canvas { 
-            position: absolute; 
-            top: 0; 
-            left: 0; 
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
         }
-        #status { 
-            padding: 10px; 
+
+        #status {
+            padding: 10px;
             font-size: 1.1em;
-            color: #00ff00; /* สีเขียวสำหรับสถานะ */
+            color: #00ff00;
+            /* สีเขียวสำหรับสถานะ */
             min-height: 25px;
+            font-weight: bold;
         }
     </style>
 </head>
+
 <body>
     <h1>YOLOv8 Real-Time Detector</h1>
     <div id="status">Connecting to camera...</div>
@@ -47,7 +59,6 @@
 
     <script>
         // **************** 1. การตั้งค่า API Endpoint ****************
-        // ใช้พอร์ต 1100 และ HTTP (เพราะ Gunicorn รัน HTTP) พร้อม Endpoint /detect
         const API_ENDPOINT = 'https://g2tuesm.consolutechcloud.com/backend/detect'; 
 
         const video = document.getElementById('video');
@@ -57,9 +68,16 @@
         let isDetecting = false;
         let frameCount = 0;
         let startTime = Date.now();
-        const DETECTION_INTERVAL_MS = 100; // 100ms = 10 FPS (ปรับได้)
+        const DETECTION_INTERVAL_MS = 100; // 10 FPS
 
-        // 2. เข้าถึงกล้อง (Media Stream)
+        // **************** 2. ตัวแปรสำหรับแจ้งเตือน ****************
+        const ALERT_LABEL = 'no cap'; 
+        const NORMAL_BG_COLOR = '#1a1a1a'; // สีพื้นหลังปกติ
+        const ALERT_BG_COLOR = '#440000'; // สีแดงเข้มสำหรับพื้นหลัง
+        const NORMAL_STATUS_COLOR = '#00ff00'; // สีเขียวสำหรับสถานะปกติ
+        const ALERT_STATUS_COLOR = '#ff4444'; // สีแดงอ่อนสำหรับข้อความแจ้งเตือน
+
+        // 3. เข้าถึงกล้อง (Media Stream)
         async function setupCamera() {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 statusDiv.innerText = "Error: Camera access not supported by this browser.";
@@ -67,10 +85,10 @@
             }
 
             try {
-                // ใช้ facingMode: 'environment' เพื่อเปิดกล้องหลังบนมือถือ
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { 
                         facingMode: 'environment', 
+                        // ใช้ขนาด 480x480 ตามที่กำหนด
                         width: { ideal: 480 }, 
                         height: { ideal: 480 } 
                     } 
@@ -85,24 +103,21 @@
                 });
             } catch (err) {
                 statusDiv.innerText = `Error: Cannot access camera. Please allow permission. (${err.name})`;
-                statusDiv.style.color = '#ff4444';
+                statusDiv.style.color = ALERT_STATUS_COLOR;
                 console.error('Error accessing camera:', err);
                 return null;
             }
         }
 
-        // 3. วนลูปการตรวจจับหลัก
+        // 4. วนลูปการตรวจจับหลัก
         async function detectionLoop() {
             if (!isDetecting) return;
 
-            // ปรับขนาด Canvas ให้ตรงกับ Video Frame
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             
-            // วาดภาพวิดีโอลงบน Canvas เพื่อใช้เป็นภาพอินพุตสำหรับส่งไปยัง API
             ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
             
-            // แปลงภาพจาก Canvas เป็น Blob (ไฟล์ภาพ)
             canvas.toBlob(async (blob) => {
                 const formData = new FormData();
                 formData.append('image', blob, 'frame.jpg');
@@ -115,51 +130,76 @@
                     
                     if (!response.ok) {
                          let errorDetail = await response.text(); 
-                         // ส่ง HTTP status กลับไป
                          throw new Error(`Server returned status ${response.status}. Detail: ${errorDetail.substring(0, 100)}...`);
                     }
                     
                     const data = await response.json();
                     
-                    // แสดงผลลัพธ์ (Bounding Boxes)
+                    // แสดงผลลัพธ์ (Bounding Boxes) และจัดการ Alert
                     drawDetections(data.detections);
                     
-                    // คำนวณ FPS
-                    frameCount++;
-                    const elapsedTime = (Date.now() - startTime) / 1000;
-                    const currentFps = (frameCount / elapsedTime).toFixed(2);
-                    statusDiv.innerText = `Status: Running | FPS: ${currentFps} | Objects: ${data.detections ? data.detections.length : 0}`;
+                    // คำนวณ FPS และตั้งค่า Status (เฉพาะเมื่อไม่มี Alert)
+                    const isCurrentlyAlerting = document.body.style.backgroundColor === ALERT_BG_COLOR;
+        
+                    if (!isCurrentlyAlerting) {
+                        frameCount++;
+                        const elapsedTime = (Date.now() - startTime) / 1000;
+                        const currentFps = (frameCount / elapsedTime).toFixed(2);
+                        statusDiv.innerText = `Status: Running | FPS: ${currentFps} | Objects: ${data.detections ? data.detections.length : 0}`;
+                        statusDiv.style.color = NORMAL_STATUS_COLOR; // คืนค่าสี Status เป็นสีเขียวปกติ
+                    }
+
 
                 } catch (error) {
-                    // แสดงข้อผิดพลาดจาก API หรือ Network
                     statusDiv.innerText = `API Error: ${error.message}`;
-                    statusDiv.style.color = '#ff4444';
+                    statusDiv.style.color = ALERT_STATUS_COLOR;
                     console.error('API/Network Error:', error);
+                    document.body.style.backgroundColor = NORMAL_BG_COLOR; // คืนค่าสีพื้นหลังเมื่อมี Error
                 }
 
-                // เรียกตัวเองซ้ำตามช่วงเวลาที่กำหนด
                 setTimeout(detectionLoop, DETECTION_INTERVAL_MS);
 
-            }, 'image/jpeg', 0.4); // ใช้ JPEG Compression 80% เพื่อลดขนาดไฟล์
+            }, 'image/jpeg', 0.4); // ใช้ JPEG Compression 40% เพื่อลดขนาดไฟล์
         }
 
 
-        // 4. ฟังก์ชันสำหรับวาดกล่องและป้ายกำกับ
+        // 5. ฟังก์ชันสำหรับวาดกล่องและป้ายกำกับ
         function drawDetections(detections) {
-        // **************** การแก้ไขที่นี่ ****************
-        // 1. แทนที่จะล้าง Canvas ทั้งหมด ให้วาดสี่เหลี่ยมโปร่งใส (Alpha) ทับ
-        // ทำให้กล่องเก่าค่อยๆ จางหายไป
-        ctx.fillStyle = 'rgba(26, 26, 26, 0.05)'; // สีพื้นหลัง (body) + Alpha 0.1 (จางลงช้า)
+        let isAlert = false;
+        
+        // **************** การลดการกระพริบ (Fade Effect) ****************
+        ctx.fillStyle = 'rgba(26, 26, 26, 0.05)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         // **********************************************
+        
+        // **************** DEBUG: แสดงผลลัพธ์ใน Console ****************
+        if (detections.length > 0) {
+        // แสดง Label ทั้งหมดที่ตรวจพบใน Console
+        const labelsFound = detections.map(d => d.label);
+        console.log("Detections found:", labelsFound);
+        }
+        // *************************************************************
         
         detections.forEach(detection => {
         const [x1, y1, x2, y2] = detection.box;
         const label = detection.label;
         const confidence = (detection.confidence * 100).toFixed(1) + '%';
         
-        // วาด Bounding Box (ใช้ความทึบแสงเต็มที่)
-        ctx.strokeStyle = '#00FF00';
+        // **************** การตรวจสอบและตั้งค่าการเตือนที่แม่นยำ ****************
+        // ใช้ .trim() เพื่อตัดช่องว่างที่อาจติดมา (เผื่อไว้)
+        if (label.trim() === ALERT_LABEL) {
+        isAlert = true;
+        // ใช้สีแจ้งเตือนสำหรับกล่องและ Label
+        ctx.strokeStyle = ALERT_STATUS_COLOR; // ขอบกล่องสีแดง
+        ctx.fillStyle = ALERT_STATUS_COLOR;
+        } else {
+        // สีปกติสำหรับ Label อื่นๆ (เช่น 'cap' หรืออื่นๆ)
+        ctx.strokeStyle = NORMAL_STATUS_COLOR; // ขอบกล่องสีเขียว
+        ctx.fillStyle = NORMAL_STATUS_COLOR;
+        }
+        // **********************************************
+        
+        // วาด Bounding Box
         ctx.lineWidth = 2;
         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
         
@@ -168,17 +208,26 @@
         const textWidth = ctx.measureText(text).width;
         
         // วาดพื้นหลังสำหรับ Label
-        ctx.fillStyle = '#00FF00';
         const textY = y1 > 20 ? y1 - 20 : y1;
         ctx.fillRect(x1, textY, textWidth + 8, 20);
         
-        // วาด Label
+        // วาด Label (สีข้อความดำ)
         ctx.fillStyle = '#000000';
         ctx.fillText(text, x1 + 4, textY + 14);
         });
+        
+        // **************** การแจ้งเตือนพื้นหลังของหน้าเว็บ ****************
+        if (isAlert) {
+        document.body.style.backgroundColor = ALERT_BG_COLOR;
+        statusDiv.innerText = `!!! ALERT: ${ALERT_LABEL.toUpperCase()} DETECTED !!!`;
+        statusDiv.style.color = ALERT_STATUS_COLOR;
+        } else {
+        document.body.style.backgroundColor = NORMAL_BG_COLOR;
+        // ข้อความสถานะจะถูกอัปเดตโดย detectionLoop (ถ้าไม่มี Alert จะแสดง FPS)
+        }
         }
 
-        // 5. เริ่มต้นทั้งหมด
+        // 6. เริ่มต้นทั้งหมด
         setupCamera().then((videoElement) => {
             if (videoElement) {
                 videoElement.play();
@@ -189,4 +238,5 @@
         });
     </script>
 </body>
+
 </html>
