@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YOLOv8 Mobile Real-Time Detector</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        /* CSS: จัดหน้าจอสำหรับมือถือ */
+        body { 
+            margin: 0; 
+            padding: 0;
+            background-color: #1a1a1a; 
+            text-align: center; 
+            font-family: Arial, sans-serif;
+            color: #ffffff;
+        }
+        #videoContainer { 
+            position: relative; 
+            width: 100%; 
+            max-width: 640px; /* จำกัดความกว้างสูงสุด */
+            margin: 0 auto; 
+        }
+        #video, #canvas { 
+            display: block; 
+            width: 100%; 
+            height: auto; 
+        }
+        #canvas { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+        }
+        #status { 
+            padding: 10px; 
+            font-size: 1.1em;
+            color: #00ff00; /* สีเขียวสำหรับสถานะ */
+            min-height: 25px;
+        }
+    </style>
+</head>
+<body>
+    <h1>YOLOv8 Real-Time Detector</h1>
+    <div id="status">Connecting to camera...</div>
+    <div id="videoContainer">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <script>
+        // **************** 1. การตั้งค่า API Endpoint ****************
+        // ใช้พอร์ต 1100 และ HTTP (เพราะ Gunicorn รัน HTTP) พร้อม Endpoint /detect
+        const API_ENDPOINT = 'https://g2tuesm.consolutechcloud.com/backend/detect'; 
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        let isDetecting = false;
+        let frameCount = 0;
+        let startTime = Date.now();
+        const DETECTION_INTERVAL_MS = 100; // 100ms = 10 FPS (ปรับได้)
+
+        // 2. เข้าถึงกล้อง (Media Stream)
+        async function setupCamera() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                statusDiv.innerText = "Error: Camera access not supported by this browser.";
+                return null;
+            }
+
+            try {
+                // ใช้ facingMode: 'environment' เพื่อเปิดกล้องหลังบนมือถือ
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: 'environment', 
+                        width: { ideal: 480 }, 
+                        height: { ideal: 480 } 
+                    } 
+                });
+                video.srcObject = stream;
+                statusDiv.style.color = '#ffffff';
+
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        resolve(video);
+                    };
+                });
+            } catch (err) {
+                statusDiv.innerText = `Error: Cannot access camera. Please allow permission. (${err.name})`;
+                statusDiv.style.color = '#ff4444';
+                console.error('Error accessing camera:', err);
+                return null;
+            }
+        }
+
+        // 3. วนลูปการตรวจจับหลัก
+        async function detectionLoop() {
+            if (!isDetecting) return;
+
+            // ปรับขนาด Canvas ให้ตรงกับ Video Frame
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            // วาดภาพวิดีโอลงบน Canvas เพื่อใช้เป็นภาพอินพุตสำหรับส่งไปยัง API
+            ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+            
+            // แปลงภาพจาก Canvas เป็น Blob (ไฟล์ภาพ)
+            canvas.toBlob(async (blob) => {
+                const formData = new FormData();
+                formData.append('image', blob, 'frame.jpg');
+
+                try {
+                    const response = await fetch(API_ENDPOINT, {
+                        method: 'POST',
+                        body: formData,
+                    });
+                    
+                    if (!response.ok) {
+                         let errorDetail = await response.text(); 
+                         // ส่ง HTTP status กลับไป
+                         throw new Error(`Server returned status ${response.status}. Detail: ${errorDetail.substring(0, 100)}...`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    // แสดงผลลัพธ์ (Bounding Boxes)
+                    drawDetections(data.detections);
+                    
+                    // คำนวณ FPS
+                    frameCount++;
+                    const elapsedTime = (Date.now() - startTime) / 1000;
+                    const currentFps = (frameCount / elapsedTime).toFixed(2);
+                    statusDiv.innerText = `Status: Running | FPS: ${currentFps} | Objects: ${data.detections ? data.detections.length : 0}`;
+
+                } catch (error) {
+                    // แสดงข้อผิดพลาดจาก API หรือ Network
+                    statusDiv.innerText = `API Error: ${error.message}`;
+                    statusDiv.style.color = '#ff4444';
+                    console.error('API/Network Error:', error);
+                }
+
+                // เรียกตัวเองซ้ำตามช่วงเวลาที่กำหนด
+                setTimeout(detectionLoop, DETECTION_INTERVAL_MS);
+
+            }, 'image/jpeg', 0.4); // ใช้ JPEG Compression 80% เพื่อลดขนาดไฟล์
+        }
+
+
+        // 4. ฟังก์ชันสำหรับวาดกล่องและป้ายกำกับ
+        function drawDetections(detections) {
+        // **************** การแก้ไขที่นี่ ****************
+        // 1. แทนที่จะล้าง Canvas ทั้งหมด ให้วาดสี่เหลี่ยมโปร่งใส (Alpha) ทับ
+        // ทำให้กล่องเก่าค่อยๆ จางหายไป
+        ctx.fillStyle = 'rgba(26, 26, 26, 0.05)'; // สีพื้นหลัง (body) + Alpha 0.1 (จางลงช้า)
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // **********************************************
+        
+        detections.forEach(detection => {
+        const [x1, y1, x2, y2] = detection.box;
+        const label = detection.label;
+        const confidence = (detection.confidence * 100).toFixed(1) + '%';
+        
+        // วาด Bounding Box (ใช้ความทึบแสงเต็มที่)
+        ctx.strokeStyle = '#00FF00';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        
+        const text = `${label} (${confidence})`;
+        ctx.font = 'bold 14px Arial';
+        const textWidth = ctx.measureText(text).width;
+        
+        // วาดพื้นหลังสำหรับ Label
+        ctx.fillStyle = '#00FF00';
+        const textY = y1 > 20 ? y1 - 20 : y1;
+        ctx.fillRect(x1, textY, textWidth + 8, 20);
+        
+        // วาด Label
+        ctx.fillStyle = '#000000';
+        ctx.fillText(text, x1 + 4, textY + 14);
+        });
+        }
+
+        // 5. เริ่มต้นทั้งหมด
+        setupCamera().then((videoElement) => {
+            if (videoElement) {
+                videoElement.play();
+                isDetecting = true;
+                statusDiv.innerText = 'Camera connected. Starting detection loop...';
+                detectionLoop();
+            }
+        });
+    </script>
+</body>
+</html>
